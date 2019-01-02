@@ -55,6 +55,9 @@ public class MainActivity extends AppCompatActivity
     private File mAudioBuffer_before2 = new File(path+"bb_2.pcm");
     private File mAudioBuffer_after1 = new File(path+"ba_1.pcm");
     private File mAudioBuffer_after2 = new File(path+"ba_2.pcm");
+    private LinkedList<short[]> m_in_q; //队列
+    private LinkedList<short[]> m_in_q2; //队列2
+    private int bufferSize = AudioRecord.getMinBufferSize(mFrequence, mChannelConfig, mAudioEncoding);
 
     private Handler handler=null;
     private Thread mCaptureThread = null;
@@ -75,6 +78,8 @@ public class MainActivity extends AppCompatActivity
         setContentView(R.layout.activity_main);
 
         handler=new Handler();
+        m_in_q = new LinkedList<short[]>();
+        m_in_q2 = new LinkedList<short[]>();
         mRecord = (Button) findViewById(R.id.audio_Record);
         mPlay = (Button) findViewById(R.id.audio_paly);
         mTran=(Button) findViewById(R.id.audio_tran);
@@ -478,90 +483,93 @@ public class MainActivity extends AppCompatActivity
         }
     }
 
-    class RealTimeTranTask extends AsyncTask<Void,Void,Void> {
+    class RealTimeRecordTask extends AsyncTask<Void,Integer,Void> {
         @Override
         protected Void doInBackground(Void... arg0) {
+            mIsRealTimeTraning=true;
             try {
-                // 根据定义好的几个配置，来获取合适的缓冲大小 缓冲越大 延时越长 效果越好
-                int bufferSize = AudioRecord.getMinBufferSize(mFrequence,
-                        mChannelConfig, mAudioEncoding)*10;//可以改为*10
-                //bufferSize=480000;
+
+                // 实例化AudioRecord
                 AudioRecord Record = new AudioRecord(
                         MediaRecorder.AudioSource.MIC, mFrequence,
                         mChannelConfig, mAudioEncoding, bufferSize);
-                AudioTrack Track = new AudioTrack(AudioManager.STREAM_MUSIC,
-                        mFrequence,
-                        mPlayChannelConfig, mAudioEncoding, bufferSize,
-                        AudioTrack.MODE_STREAM);
-                Record.startRecording();//开始录制
-                Track.play();//开始播放
-
-
                 // 定义缓冲
                 short[] buffer = new short[bufferSize];
-                short[] tmpBuf = new short[bufferSize];
-                short[] reBuf = new short[bufferSize];
-                mIsRealTimeTraning=true;
-
-
-
-
+                // 开始录制
+                Record.startRecording();
+                int r = 0; // 存储录制进度
+                byte[] b=new byte[2];
                 // 定义循环，根据isRecording的值来判断是否继续录制
                 while (mIsRealTimeTraning) {
                     // 从bufferSize中读取字节，返回读取的short个数
                     int bufferReadResult = Record
                             .read(buffer, 0, buffer.length);
-                    //System.arraycopy(buffer, 0, tmpBuf, 0, bufferReadResult); 直接复制
-                    //大端转小端处理
-                    DataOutputStream dos = new DataOutputStream(
-                            new BufferedOutputStream(
-                                    new FileOutputStream(mAudioBuffer_before1)));
-                    byte[] b=new byte[2];
+                    // 大小端变换
                     for (int i = 0; i < bufferReadResult; i++) {
                         shortToByte_LH(buffer[i], b);
-                        tmpBuf[i]=(byteToShort_HL(b));
-                        dos.writeShort(byteToShort_HL(b));
+
+                        buffer[i]=(byteToShort_HL(b));
                     }
-                    dos.close();
-                    //对buffer进行处理
-                    rnnoise(path+mAudioBuffer_before1.getName(),path+mAudioBuffer_after1.getName());
-
-                    //小端转大端
-                    try {
-                        DataInputStream dis= new DataInputStream(
-                                new BufferedInputStream(new FileInputStream(mAudioBuffer_after1)));
-
-                        /*for (int i = 0; i < bufferReadResult; i++) {
-                            shortToByte_LH(tmpBuf[i], b);
-                            reBuf[i]=(byteToShort_HL(b));
-                        }*/
-
-                        int i = 0;
-                        //延时 应该没啥用
-                        try
-                        {
-                            Thread.currentThread().sleep(10);//毫秒
-                        }
-                        catch(Exception e){}
-                        while (dis.available() > 0 && i < buffer.length) {
-                            shortToByte_LH(dis.readShort(),b);
-                            reBuf[i] =byteToShort_HL(b);
-                            i++;
-                        }
-                        dis.close();
-
-
+                    if (m_in_q.size() >= 3)
+                    {
+                        m_in_q.removeFirst();
                     }
-                    catch (Exception e){}
-
-
-
-                   Track.write(reBuf, 0, tmpBuf.length);
-
+                    m_in_q.add(buffer);
+                    publishProgress(new Integer(r)); // 向UI线程报告当前进度
+                    r++; // 自增进度值
                 }
                 // 录制结束
                 Record.stop();
-                Track.stop();
+                Log.i("slack", "::" + mAudioFile.length());
+                dos.close();
+            } catch (Exception e) {
+                // TODO: handle exception
+                Log.e("slack", "::" + e.getMessage());
+            }
+            return null;
+        }
+
+
+        // 当在上面方法中调用publishProgress时，该方法触发,该方法在UI线程中被执行
+        protected void onProgressUpdate(Integer... progress) {
+            //
+        }
+
+
+        protected void onPostExecute(Void result) {
+
+        }
+
+    }
+
+    
+
+    
+
+    class RealTimeTranTask extends AsyncTask<Void,Void,Void> {
+        @Override
+        protected Void doInBackground(Void... arg0) {
+            try {
+                // 定义缓冲
+                short[] outBuf = new short[bufferSize];
+                short[] tmpBuf = new short[bufferSize];
+                mIsRealTimeTraning=true;
+                // 定义循环，根据isRecording的值来判断是否继续录制
+                while (mIsRealTimeTraning) {
+                    try{
+                    tmpBuf = m_in_q.getFirst();
+					outBuf= m_out_bytes.clone();
+                    m_in_q.removeFirst();//移除录音队首
+                    if (m_in_q2.size() >= 3)
+                    {
+                        m_in_q2.removeFirst();
+                    }
+                    m_in_q2.add(outBuf);//处理结果放入对列2
+                    }
+                     catch (Exception e) {
+                }
+
+                    
             } catch (Exception e) {
                 // TODO: handle exception
                 Log.e("slack", "error:" + e.getMessage());
@@ -582,6 +590,70 @@ public class MainActivity extends AppCompatActivity
             }
 
         };
+        protected void onPostExecute(Void result) {
+
+        }
+
+
+        protected void onPreExecute() {
+
+        }
+    }
+
+    class PlayTask extends AsyncTask<Void,Void,Void> {
+        File AudioFile;
+
+        PlayTask(File A) {
+            AudioFile = A;
+        } //初始化
+
+        @Override
+
+        protected Void doInBackground(Void... arg0) {
+            mIsPlaying = true;
+            short[] buffer = new short[bufferSize];
+            short[] tmpBuf = new short[bufferSize];
+            try {
+                
+                AudioTrack track = new AudioTrack(AudioManager.STREAM_MUSIC,
+                        mFrequence,
+                        mPlayChannelConfig, mAudioEncoding, bufferSize,
+                        AudioTrack.MODE_STREAM);
+                // 开始播放
+                track.play();
+                mIsRealTimeTraning=true;
+                byte [] b=new byte[2];
+                while (mIsRealTimeTraning) {
+                    tmpBuf=m_in_q2.getFirst();
+                    int i = 0;
+                    //大小端转换
+                    while (i < buffer.length) {
+                        shortToByte_LH(tmpBuf[i],b);
+                        buffer[i] =byteToShort_HL(b);
+                        i++;
+                    }
+                    // 然后将数据写入到AudioTrack中
+                    track.write(buffer, 0, buffer.length);
+
+                }
+
+
+                // 播放结束
+                track.stop();
+                dis.close();
+                mIsPlaying = false;
+                mPlay.setTag(null);
+                mPlay.setText("播放录音音频");
+                mPlay2.setTag(null);
+                mPlay2.setText("播放处理后音频");
+            } catch (Exception e) {
+                // TODO: handle exception
+                Log.e("slack", "error:" + e.getMessage());
+            }
+            return null;
+        }
+
+
         protected void onPostExecute(Void result) {
 
         }
