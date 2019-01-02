@@ -11,7 +11,7 @@
 
 int dn(const char* infile,const char* outfile){
     int i;
-    int first = 1;
+    int first = 0;
     float x[FRAME_SIZE];
     FILE *f1, *fout;
     DenoiseState *st;
